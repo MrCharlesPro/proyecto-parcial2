@@ -1,0 +1,99 @@
+name: CI-CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Playwright (API + UI)
+        run: npx playwright test
+      - name: Subir reporte
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report
+      - name: Registrar resultado en OpenObserve
+        if: always()
+        env:
+          OO_URL: ${{ secrets.OO_URL }}
+          OO_EMAIL: ${{ secrets.OO_EMAIL }}
+          OO_PASS: ${{ secrets.OO_PASS }}
+          STATUS: ${{ job.status }}
+          MSG: ${{ github.event.head_commit.message }}
+        run: |
+          jq -n --arg status "$STATUS" --arg commit "$GITHUB_SHA" --arg branch "$GITHUB_REF_NAME" \
+                --arg actor "$GITHUB_ACTOR" --arg msg "$MSG" --arg run "$GITHUB_RUN_ID" \
+            '[{event:"tests", status:$status, commit:$commit, branch:$branch, actor:$actor, message:$msg, run_id:$run}]' \
+          | curl -sS -u "$OO_EMAIL:$OO_PASS" -H "Content-Type: application/json" \
+              -X POST "$OO_URL/api/default/cicd_pipeline/_json" -d @-
+
+  deploy:
+    needs: test            # solo corre si test = success
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/users-app:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/users-app:${{ github.sha }}
+      - name: Copiar archivos de despliegue
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "docker-compose.yml,otel-collector-config.yaml"
+          target: "~/deploy"
+      - name: Desplegar en EC2 por SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: DOCKERHUB_USERNAME,JWT_SECRET,OO_EMAIL,OO_PASS
+          script: |
+            cd ~/deploy
+            printf "DOCKERHUB_USERNAME=%s\nJWT_SECRET=%s\nOO_EMAIL=%s\nOO_PASS=%s\nOO_AUTH=%s\n" \
+              "$DOCKERHUB_USERNAME" "$JWT_SECRET" "$OO_EMAIL" "$OO_PASS" \
+              "$(printf '%s:%s' "$OO_EMAIL" "$OO_PASS" | base64 -w0)" > .env
+            sudo docker compose pull
+            sudo docker compose up -d
+            sudo docker image prune -f
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          OO_EMAIL: ${{ secrets.OO_EMAIL }}
+          OO_PASS: ${{ secrets.OO_PASS }}
+      - name: Registrar despliegue en OpenObserve
+        if: always()
+        env:
+          OO_URL: ${{ secrets.OO_URL }}
+          OO_EMAIL: ${{ secrets.OO_EMAIL }}
+          OO_PASS: ${{ secrets.OO_PASS }}
+          STATUS: ${{ job.status }}
+        run: |
+          jq -n --arg status "$STATUS" --arg commit "$GITHUB_SHA" --arg branch "$GITHUB_REF_NAME" \
+                --arg actor "$GITHUB_ACTOR" --arg run "$GITHUB_RUN_ID" \
+            '[{event:"deploy", status:$status, commit:$commit, branch:$branch, actor:$actor, run_id:$run, target:"aws-ec2"}]' \
+          | curl -sS -u "$OO_EMAIL:$OO_PASS" -H "Content-Type: application/json" \
+              -X POST "$OO_URL/api/default/cicd_pipeline/_json" -d @-

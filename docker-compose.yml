@@ -1,0 +1,42 @@
+services:
+  openobserve:
+    image: public.ecr.aws/zinclabs/openobserve:latest
+    restart: unless-stopped
+    ports:
+      - "5080:5080"
+    environment:
+      ZO_ROOT_USER_EMAIL: ${OO_EMAIL}
+      ZO_ROOT_USER_PASSWORD: ${OO_PASS}
+      ZO_DATA_DIR: /data
+    volumes:
+      - oo-data:/data
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.108.0
+    restart: unless-stopped
+    command: ["--config=/etc/otel/config.yaml"]
+    environment:
+      OO_AUTH: ${OO_AUTH}
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel/config.yaml:ro
+      - /:/hostfs:ro
+    depends_on:
+      - openobserve
+
+  app:
+    image: ${DOCKERHUB_USERNAME}/users-app:latest
+    restart: unless-stopped
+    ports:
+      - "80:3000"
+    environment:
+      JWT_SECRET: ${JWT_SECRET}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_SERVICE_NAME: users-app
+    volumes:
+      - app-data:/data
+    depends_on:
+      - otel-collector
+
+volumes:
+  oo-data:
+  app-data:
