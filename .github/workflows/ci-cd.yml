@@ -20,12 +20,14 @@ jobs:
         run: npx playwright test
       - name: Subir reporte
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
           path: playwright-report
       - name: Registrar resultado en OpenObserve
         if: always()
+        continue-on-error: true
         env:
           OO_URL: ${{ secrets.OO_URL }}
           OO_EMAIL: ${{ secrets.OO_EMAIL }}
@@ -36,7 +38,7 @@ jobs:
           jq -n --arg status "$STATUS" --arg commit "$GITHUB_SHA" --arg branch "$GITHUB_REF_NAME" \
                 --arg actor "$GITHUB_ACTOR" --arg msg "$MSG" --arg run "$GITHUB_RUN_ID" \
             '[{event:"tests", status:$status, commit:$commit, branch:$branch, actor:$actor, message:$msg, run_id:$run}]' \
-          | curl -sS -u "$OO_EMAIL:$OO_PASS" -H "Content-Type: application/json" \
+          | curl -sS --retry 6 --retry-delay 5 --retry-connrefused -u "$OO_EMAIL:$OO_PASS" -H "Content-Type: application/json" \
               -X POST "$OO_URL/api/default/cicd_pipeline/_json" -d @-
 
   deploy:
@@ -86,6 +88,7 @@ jobs:
           OO_PASS: ${{ secrets.OO_PASS }}
       - name: Registrar despliegue en OpenObserve
         if: always()
+        continue-on-error: true
         env:
           OO_URL: ${{ secrets.OO_URL }}
           OO_EMAIL: ${{ secrets.OO_EMAIL }}
@@ -95,5 +98,5 @@ jobs:
           jq -n --arg status "$STATUS" --arg commit "$GITHUB_SHA" --arg branch "$GITHUB_REF_NAME" \
                 --arg actor "$GITHUB_ACTOR" --arg run "$GITHUB_RUN_ID" \
             '[{event:"deploy", status:$status, commit:$commit, branch:$branch, actor:$actor, run_id:$run, target:"aws-ec2"}]' \
-          | curl -sS -u "$OO_EMAIL:$OO_PASS" -H "Content-Type: application/json" \
+          | curl -sS --retry 6 --retry-delay 5 --retry-connrefused -u "$OO_EMAIL:$OO_PASS" -H "Content-Type: application/json" \
               -X POST "$OO_URL/api/default/cicd_pipeline/_json" -d @-
