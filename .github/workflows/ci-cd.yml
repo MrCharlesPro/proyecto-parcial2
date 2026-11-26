@@ -73,6 +73,7 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           envs: DOCKERHUB_USERNAME,JWT_SECRET,OO_EMAIL,OO_PASS
+          script_stop: true
           script: |
             cd ~/deploy
             printf "DOCKERHUB_USERNAME=%s\nJWT_SECRET=%s\nOO_EMAIL=%s\nOO_PASS=%s\nOO_AUTH=%s\n" \
@@ -81,6 +82,7 @@ jobs:
             sudo docker compose pull
             sudo docker compose up -d
             sudo docker image prune -f
+            curl -fsS --retry 10 --retry-delay 5 --retry-connrefused http://localhost/health
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
